@@ -18,6 +18,10 @@ class Auth:
     token: str
 
 
+class NetworkError(RuntimeError):
+    pass
+
+
 class WekanClient:
     def __init__(self, base_url: str, timeout_seconds: float = 20) -> None:
         self.base_url = base_url.rstrip("/")
@@ -61,37 +65,28 @@ class WekanClient:
         # Keep network retries limited to safe methods.
         safe_methods = {"GET", "PUT", "DELETE"}
         method_upper = method.upper()
-        attempts = 3 if method_upper in safe_methods else 1
+        attempts = 6 if method_upper in safe_methods else 1
 
-        if attempts == 1:
-            resp = self.session.request(
-                method_upper,
-                self._url(path),
-                headers=self._headers(),
-                json=json,
-                timeout=self.timeout_seconds,
-            )
-        else:
-            last_exc: Exception | None = None
-            resp: requests.Response | None = None
-            for attempt in range(attempts):
-                try:
-                    resp = self.session.request(
-                        method_upper,
-                        self._url(path),
-                        headers=self._headers(),
-                        json=json,
-                        timeout=self.timeout_seconds,
-                    )
-                    last_exc = None
-                    break
-                except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as exc:
-                    last_exc = exc
-                    if attempt + 1 < attempts:
-                        time.sleep(0.25 * (2**attempt))
+        last_exc: Exception | None = None
+        resp: requests.Response | None = None
+        for attempt in range(attempts):
+            try:
+                resp = self.session.request(
+                    method_upper,
+                    self._url(path),
+                    headers=self._headers(),
+                    json=json,
+                    timeout=self.timeout_seconds,
+                )
+                last_exc = None
+                break
+            except (requests.exceptions.ConnectionError, requests.exceptions.Timeout, OSError) as exc:
+                last_exc = exc
+                if attempt + 1 < attempts:
+                    time.sleep(0.25 * (2**attempt))
 
-            if resp is None:
-                raise RuntimeError(f"{method_upper} {path} failed after retries: {last_exc}")
+        if resp is None:
+            raise NetworkError(f"{method_upper} {path} network error: {last_exc}") from None
 
         try:
             data = resp.json() if resp.content else None
@@ -131,7 +126,7 @@ class WekanClient:
                 data = self._request("POST", "/users/login", json=payload)
                 last_exc = None
                 break
-            except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as exc:
+            except NetworkError as exc:
                 last_exc = exc
                 if attempt < 4:
                     # 0.1s, 0.2s, 0.4s, 0.8s
@@ -192,6 +187,12 @@ class WekanClient:
         if not isinstance(data, list):
             raise RuntimeError(f"Unexpected get_lists response: {data}")
         return [{k: str(v) for k, v in item.items()} for item in data if isinstance(item, dict)]
+
+    def get_list(self, *, board_id: str, list_id: str) -> dict[str, str]:
+        data = self._request("GET", f"/api/boards/{board_id}/lists/{list_id}")
+        if not isinstance(data, dict) or "_id" not in data:
+            raise RuntimeError(f"Unexpected get_list response: {data}")
+        return {k: str(v) for k, v in data.items()}
 
     def delete_list(self, *, board_id: str, list_id: str) -> str:
         data = self._request("DELETE", f"/api/boards/{board_id}/lists/{list_id}")

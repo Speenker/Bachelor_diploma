@@ -4,6 +4,17 @@ import time
 from typing import Any
 
 
+def _redact_kwargs(kwargs: dict[str, Any]) -> dict[str, Any]:
+    safe_kwargs: dict[str, Any] = dict(kwargs)
+    headers = safe_kwargs.get("headers")
+    if isinstance(headers, dict):
+        safe_headers = dict(headers)
+        if "Authorization" in safe_headers:
+            safe_headers["Authorization"] = "<redacted>"
+        safe_kwargs["headers"] = safe_headers
+    return safe_kwargs
+
+
 def request_with_network_retry(
     session: Any,
     method: str,
@@ -36,6 +47,7 @@ def request_with_network_retry(
                 sleep_seconds = min(backoff_cap_seconds, backoff_base_seconds * (2**attempt))
                 time.sleep(sleep_seconds)
 
+    kwargs = _redact_kwargs(kwargs)
     raise AssertionError(f"Network error calling {method} {url}: {last_exc}")
 
 

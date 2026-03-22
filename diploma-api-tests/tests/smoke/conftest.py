@@ -4,9 +4,8 @@ import time
 import uuid
 
 import pytest
-import requests
 
-from diploma_tests.client import WekanClient
+from diploma_tests.client import NetworkError, WekanClient
 
 
 def _recover_created_board_by_title(
@@ -18,11 +17,17 @@ def _recover_created_board_by_title(
 ) -> dict[str, str] | None:
     deadline = time.monotonic() + timeout_seconds
     for attempt in range(1, attempts + 1):
-        boards = client.get_user_boards()
+        try:
+            boards = client.get_user_boards()
+        except NetworkError:
+            boards = []
         match = next((b for b in boards if b.get("title") == title and b.get("_id")), None)
         if match is not None:
             board_id = str(match["_id"])
-            return client.get_board(board_id)
+            try:
+                return client.get_board(board_id)
+            except NetworkError:
+                return None
 
         remaining = deadline - time.monotonic()
         if attempt == attempts or remaining <= 0:
@@ -37,7 +42,7 @@ def smoke_board(client: WekanClient) -> dict[str, str]:
     title = f"api-smoke-shared-{suffix}"
     try:
         board = client.create_board(title=title)
-    except (requests.exceptions.ConnectionError, requests.exceptions.Timeout):
+    except NetworkError:
         recovered = _recover_created_board_by_title(client, title=title, timeout_seconds=2.0, attempts=5)
         if recovered is None:
             raise

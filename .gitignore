@@ -10,6 +10,19 @@ ENV/
 __pycache__/
 *.py[cod]
 
+# Test/coverage/tool caches (if commands are run from repo root)
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
+junit.xml
+test-results/
+reports/
+
+.mypy_cache/
+.ruff_cache/
+.tox/
+
 # VS Code settings (optional, keep local)
 .vscode/
 
@@ -17,8 +30,21 @@ __pycache__/
 extract_docx_text.py
 
 # Reference documents and extracted text
+*.doc
 *.docx
+*.docm
+*.dot
+*.dotx
+*.dotm
 *.docx.txt
+*.doc.txt
+*.docm.txt
+
+# Local notes in repo root (do not ignore txt inside project subfolders)
+/*.txt
+
+# Supervisor progress notes (local)
+прогресс и план.txt
 
 # Optional: keep the Wekan source tree out of your diploma repository
 wekan/

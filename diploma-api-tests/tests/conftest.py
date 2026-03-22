@@ -16,7 +16,7 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 from diploma_tests.config import Settings
-from diploma_tests.client import WekanClient
+from diploma_tests.client import NetworkError, WekanClient
 import uuid
 
 
@@ -28,6 +28,19 @@ def settings() -> Settings:
 @pytest.fixture(scope="session")
 def client(settings: Settings) -> WekanClient:
     return WekanClient.from_settings(settings)
+
+
+@pytest.fixture(scope="session")
+def client2(settings: Settings) -> WekanClient:
+    if not settings.has_second_login_credentials:
+        pytest.skip("Second test user is not configured (set WEKAN_USERNAME_2/WEKAN_EMAIL_2 and WEKAN_PASSWORD_2)")
+
+    client = WekanClient(settings.base_url, timeout_seconds=settings.timeout_seconds)
+    try:
+        client.login(username=settings.username2, email=settings.email2, password=settings.password2 or "")
+    except NetworkError:
+        pytest.skip("Wekan is not reachable for second-user login")
+    return client
 
 
 @pytest.fixture(scope="session")
