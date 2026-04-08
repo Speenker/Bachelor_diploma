@@ -6,6 +6,10 @@ import uuid
 import pytest
 
 from diploma_tests.client import NetworkError
+from diploma_tests.waiters import (
+    delete_list_with_retry_and_confirm_absent,
+    poll_until_board_deleted,
+)
 
 
 pytestmark = pytest.mark.regression
@@ -51,25 +55,6 @@ def _create_board_resilient(client, *, title: str) -> dict[str, str]:
     raise AssertionError("Network error during board creation")
 
 
-def _poll_until_list_absent(client, *, board_id: str, list_id: str, timeout_seconds: float = 6.0, attempts: int = 12) -> None:
-    deadline = time.monotonic() + timeout_seconds
-    for attempt in range(1, attempts + 1):
-        try:
-            lists = client.get_lists(board_id=board_id)
-        except NetworkError:
-            lists = []
-
-        if not any(str(item.get("_id") or "") == list_id for item in lists):
-            return
-
-        remaining = deadline - time.monotonic()
-        if attempt == attempts or remaining <= 0:
-            break
-        time.sleep(min(0.25, max(0.0, remaining / max(1, (attempts - attempt)))))
-
-    raise AssertionError("List still present after deletion")
-
-
 def test_lists_create_list_returns_id(client):
     suffix = uuid.uuid4().hex[:8]
     board_id = None
@@ -85,12 +70,12 @@ def test_lists_create_list_returns_id(client):
     finally:
         if board_id and list_id:
             try:
-                client.delete_list(board_id=board_id, list_id=list_id)
+                delete_list_with_retry_and_confirm_absent(client=client, board_id=board_id, list_id=list_id)
             except Exception:
                 pass
         if board_id:
             try:
-                client.delete_board(board_id)
+                poll_until_board_deleted(client=client, board_id=board_id, timeout_seconds=6.0, attempts=8)
             except Exception:
                 pass
 
@@ -114,12 +99,12 @@ def test_lists_get_lists_contains_created_list(client):
     finally:
         if board_id and list_id:
             try:
-                client.delete_list(board_id=board_id, list_id=list_id)
+                delete_list_with_retry_and_confirm_absent(client=client, board_id=board_id, list_id=list_id)
             except Exception:
                 pass
         if board_id:
             try:
-                client.delete_board(board_id)
+                poll_until_board_deleted(client=client, board_id=board_id, timeout_seconds=6.0, attempts=8)
             except Exception:
                 pass
 
@@ -144,12 +129,12 @@ def test_lists_get_list_by_id_returns_expected_fields(client):
     finally:
         if board_id and list_id:
             try:
-                client.delete_list(board_id=board_id, list_id=list_id)
+                delete_list_with_retry_and_confirm_absent(client=client, board_id=board_id, list_id=list_id)
             except Exception:
                 pass
         if board_id:
             try:
-                client.delete_board(board_id)
+                poll_until_board_deleted(client=client, board_id=board_id, timeout_seconds=6.0, attempts=8)
             except Exception:
                 pass
 
@@ -167,13 +152,10 @@ def test_lists_delete_list_removes_from_get_lists(client):
         list_id = client.create_list(board_id=board_id, title=f"api-reg-list-del-{suffix}")
         assert list_id
 
-        deleted = client.delete_list(board_id=board_id, list_id=list_id)
-        assert str(deleted) == str(list_id)
-
-        _poll_until_list_absent(client, board_id=board_id, list_id=list_id)
+        delete_list_with_retry_and_confirm_absent(client=client, board_id=board_id, list_id=list_id)
     finally:
         if board_id:
             try:
-                client.delete_board(board_id)
+                poll_until_board_deleted(client=client, board_id=board_id, timeout_seconds=6.0, attempts=8)
             except Exception:
                 pass

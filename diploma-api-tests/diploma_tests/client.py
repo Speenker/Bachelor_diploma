@@ -7,6 +7,7 @@ import time
 
 import requests
 from requests.adapters import HTTPAdapter
+from urllib3.exceptions import HTTPError as Urllib3HTTPError
 from urllib3.util.retry import Retry
 
 from .config import Settings
@@ -20,6 +21,23 @@ class Auth:
 
 class NetworkError(RuntimeError):
     pass
+
+
+class HttpError(RuntimeError):
+    def __init__(self, *, method: str, path: str, status_code: int, body: Any) -> None:
+        super().__init__(f"{method} {path} failed: {status_code} {body}")
+        self.method = method
+        self.path = path
+        self.status_code = status_code
+        self.body = body
+
+
+def _is_network_exception(exc: BaseException) -> bool:
+    # requests wraps many underlying socket/urllib3 errors into RequestException,
+    # but not always reliably across platforms/backends.
+    if isinstance(exc, (requests.exceptions.RequestException, OSError, Urllib3HTTPError)):
+        return True
+    return False
 
 
 class WekanClient:
@@ -80,13 +98,16 @@ class WekanClient:
                 )
                 last_exc = None
                 break
-            except (requests.exceptions.ConnectionError, requests.exceptions.Timeout, OSError) as exc:
+            except Exception as exc:
+                if not _is_network_exception(exc):
+                    raise
                 last_exc = exc
                 if attempt + 1 < attempts:
                     time.sleep(0.25 * (2**attempt))
 
         if resp is None:
-            raise NetworkError(f"{method_upper} {path} network error: {last_exc}") from None
+            message = f"{method_upper} {path} network error: {type(last_exc).__name__ if last_exc else 'UnknownError'}"
+            raise NetworkError(message) from None
 
         try:
             data = resp.json() if resp.content else None
@@ -94,7 +115,7 @@ class WekanClient:
             data = resp.text
 
         if resp.status_code >= 400:
-            raise RuntimeError(f"{method} {path} failed: {resp.status_code} {data}")
+            raise HttpError(method=method_upper, path=path, status_code=int(resp.status_code), body=data)
         return data
 
     @classmethod
@@ -133,7 +154,7 @@ class WekanClient:
                     time.sleep(0.1 * (2**attempt))
 
         if data is None:
-            raise RuntimeError(f"POST /users/login failed after retries: {last_exc}")
+            raise NetworkError(f"POST /users/login failed after retries: {last_exc}")
         if not isinstance(data, dict) or "token" not in data or "id" not in data:
             raise RuntimeError(f"Unexpected login response: {data}")
 
@@ -159,10 +180,49 @@ class WekanClient:
             "permission": permission,
             "color": color,
         }
-        data = self._request("POST", "/api/boards", json=payload)
-        if not isinstance(data, dict) or "_id" not in data:
-            raise RuntimeError(f"Unexpected create_board response: {data}")
-        return {k: str(v) for k, v in data.items()}
+        backoff_seconds = 0.15
+        for attempt in range(1, 4):
+            try:
+                data = self._request("POST", "/api/boards", json=payload)
+                if not isinstance(data, dict) or "_id" not in data:
+                    raise RuntimeError(f"Unexpected create_board response: {data}")
+                return {k: str(v) for k, v in data.items()}
+            except NetworkError:
+                recovered = self._recover_board_by_title(title=title, timeout_seconds=3.0, attempts=12)
+                if recovered is not None:
+                    return recovered
+                if attempt < 3:
+                    time.sleep(backoff_seconds)
+                    backoff_seconds = min(0.6, backoff_seconds * 2)
+
+        recovered = self._recover_board_by_title(title=title, timeout_seconds=6.0, attempts=20)
+        if recovered is not None:
+            return recovered
+        raise NetworkError("Network error during board creation")
+
+
+    def _recover_board_by_title(self, *, title: str, timeout_seconds: float, attempts: int) -> dict[str, str] | None:
+        deadline = time.monotonic() + timeout_seconds
+        for attempt in range(1, attempts + 1):
+            try:
+                boards = self.get_user_boards()
+            except (NetworkError, HttpError):
+                boards = []
+
+            match = next((b for b in boards if b.get("title") == title and b.get("_id")), None)
+            if match is not None:
+                board_id = str(match.get("_id") or "")
+                if board_id:
+                    try:
+                        return self.get_board(board_id)
+                    except (NetworkError, HttpError):
+                        return {k: str(v) for k, v in match.items()}
+
+            remaining = deadline - time.monotonic()
+            if attempt == attempts or remaining <= 0:
+                break
+            time.sleep(min(0.25, max(0.0, remaining / max(1, (attempts - attempt)))))
+        return None
 
     def get_board(self, board_id: str) -> dict[str, str]:
         data = self._request("GET", f"/api/boards/{board_id}")
@@ -177,10 +237,44 @@ class WekanClient:
         return str(data["_id"])
 
     def create_list(self, *, board_id: str, title: str) -> str:
-        data = self._request("POST", f"/api/boards/{board_id}/lists", json={"title": title})
-        if not isinstance(data, dict) or "_id" not in data:
-            raise RuntimeError(f"Unexpected create_list response: {data}")
-        return str(data["_id"])
+        backoff_seconds = 0.15
+        for attempt in range(1, 4):
+            try:
+                data = self._request("POST", f"/api/boards/{board_id}/lists", json={"title": title})
+                if not isinstance(data, dict) or "_id" not in data:
+                    raise RuntimeError(f"Unexpected create_list response: {data}")
+                return str(data["_id"])
+            except NetworkError:
+                recovered = self._recover_list_id_by_title(board_id=board_id, title=title, timeout_seconds=2.5, attempts=10)
+                if recovered is not None:
+                    return recovered
+                if attempt < 3:
+                    time.sleep(backoff_seconds)
+                    backoff_seconds = min(0.6, backoff_seconds * 2)
+
+        recovered = self._recover_list_id_by_title(board_id=board_id, title=title, timeout_seconds=5.0, attempts=16)
+        if recovered is not None:
+            return recovered
+        raise NetworkError("Network error during list creation")
+
+
+    def _recover_list_id_by_title(self, *, board_id: str, title: str, timeout_seconds: float, attempts: int) -> str | None:
+        deadline = time.monotonic() + timeout_seconds
+        for attempt in range(1, attempts + 1):
+            try:
+                lists = self.get_lists(board_id=board_id)
+            except (NetworkError, HttpError):
+                lists = []
+
+            match = next((l for l in lists if l.get("title") == title and l.get("_id")), None)
+            if match is not None:
+                return str(match.get("_id") or "")
+
+            remaining = deadline - time.monotonic()
+            if attempt == attempts or remaining <= 0:
+                break
+            time.sleep(min(0.25, max(0.0, remaining / max(1, (attempts - attempt)))))
+        return None
 
     def get_lists(self, *, board_id: str) -> list[dict[str, str]]:
         data = self._request("GET", f"/api/boards/{board_id}/lists")
@@ -215,10 +309,52 @@ class WekanClient:
             "authorId": self.auth.user_id,
             "swimlaneId": swimlane_id,
         }
-        data = self._request("POST", f"/api/boards/{board_id}/lists/{list_id}/cards", json=payload)
-        if not isinstance(data, dict) or "_id" not in data:
-            raise RuntimeError(f"Unexpected create_card response: {data}")
-        return str(data["_id"])
+        backoff_seconds = 0.15
+        for attempt in range(1, 4):
+            try:
+                data = self._request("POST", f"/api/boards/{board_id}/lists/{list_id}/cards", json=payload)
+                if not isinstance(data, dict) or "_id" not in data:
+                    raise RuntimeError(f"Unexpected create_card response: {data}")
+                return str(data["_id"])
+            except NetworkError:
+                recovered = self._recover_card_id_by_title(board_id=board_id, list_id=list_id, title=title, timeout_seconds=2.5, attempts=10)
+                if recovered is not None:
+                    return recovered
+                if attempt < 3:
+                    time.sleep(backoff_seconds)
+                    backoff_seconds = min(0.6, backoff_seconds * 2)
+
+        recovered = self._recover_card_id_by_title(board_id=board_id, list_id=list_id, title=title, timeout_seconds=5.0, attempts=16)
+        if recovered is not None:
+            return recovered
+        raise NetworkError("Network error during card creation")
+
+
+    def _recover_card_id_by_title(
+        self,
+        *,
+        board_id: str,
+        list_id: str,
+        title: str,
+        timeout_seconds: float,
+        attempts: int,
+    ) -> str | None:
+        deadline = time.monotonic() + timeout_seconds
+        for attempt in range(1, attempts + 1):
+            try:
+                cards = self.get_list_cards(board_id=board_id, list_id=list_id)
+            except (NetworkError, HttpError):
+                cards = []
+
+            match = next((c for c in cards if c.get("title") == title and c.get("_id")), None)
+            if match is not None:
+                return str(match.get("_id") or "")
+
+            remaining = deadline - time.monotonic()
+            if attempt == attempts or remaining <= 0:
+                break
+            time.sleep(min(0.25, max(0.0, remaining / max(1, (attempts - attempt)))))
+        return None
 
     def get_swimlanes(self, *, board_id: str) -> list[dict[str, str]]:
         data = self._request("GET", f"/api/boards/{board_id}/swimlanes")
@@ -249,6 +385,26 @@ class WekanClient:
         if not isinstance(data, list):
             raise RuntimeError(f"Unexpected get_swimlane_cards response: {data}")
         return [{k: str(v) for k, v in item.items()} for item in data if isinstance(item, dict)]
+
+    def get_list_cards(self, *, board_id: str, list_id: str) -> list[dict[str, str]]:
+        data = self._request("GET", f"/api/boards/{board_id}/lists/{list_id}/cards")
+        if not isinstance(data, list):
+            raise RuntimeError(f"Unexpected get_list_cards response: {data}")
+        return [{k: str(v) for k, v in item.items()} for item in data if isinstance(item, dict)]
+
+    def get_card(self, *, board_id: str, list_id: str, card_id: str) -> dict[str, str] | None:
+        data = self._request("GET", f"/api/boards/{board_id}/lists/{list_id}/cards/{card_id}")
+        if data is None:
+            return None
+        if not isinstance(data, dict):
+            raise RuntimeError(f"Unexpected get_card response: {data}")
+        return {k: str(v) for k, v in data.items()}
+
+    def get_card_global(self, *, card_id: str) -> dict[str, str]:
+        data = self._request("GET", f"/api/cards/{card_id}")
+        if not isinstance(data, dict) or "_id" not in data:
+            raise RuntimeError(f"Unexpected get_card_global response: {data}")
+        return {k: str(v) for k, v in data.items()}
 
     def update_card(
         self,

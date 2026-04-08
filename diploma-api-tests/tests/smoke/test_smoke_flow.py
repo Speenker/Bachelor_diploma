@@ -6,7 +6,12 @@ import pytest
 
 from diploma_tests.config import Settings
 from diploma_tests.http_helpers import is_wekan_unauthorized, request_with_network_retry
-from diploma_tests.waiters import poll_until_board_deleted, poll_until_card_absent
+from diploma_tests.waiters import (
+    delete_card_with_retry_and_confirm_absent,
+    delete_list_with_retry_and_confirm_absent,
+    poll_until_board_deleted,
+    poll_until_card_absent,
+)
 
 
 pytestmark = [pytest.mark.smoke, pytest.mark.regression]
@@ -164,8 +169,7 @@ def test_smoke_delete_card_confirmed_with_polling(
         title=f"delete-{smoke_suffix}",
     )
 
-    deleted_id = client.delete_card(board_id=smoke_board_id, list_id=smoke_list["_id"], card_id=card_id)
-    assert deleted_id == card_id
+    delete_card_with_retry_and_confirm_absent(client=client, board_id=smoke_board_id, list_id=smoke_list["_id"], card_id=card_id, timeout_seconds=4.0, attempts=10)
 
     poll_until_card_absent(
         client=client,
@@ -195,7 +199,7 @@ def test_smoke_cleanup_delete_list_and_board_best_effort(client, smoke_suffix: s
         # Best-effort cleanup if assertions fail mid-test.
         if list_id:
             try:
-                client.delete_list(board_id=str(board_id), list_id=str(list_id))
+                delete_list_with_retry_and_confirm_absent(client=client, board_id=str(board_id), list_id=str(list_id), timeout_seconds=4.0, attempts=10)
             except Exception:
                 pass
         if board_id:

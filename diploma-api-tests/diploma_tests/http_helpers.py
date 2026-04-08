@@ -3,6 +3,11 @@ from __future__ import annotations
 import time
 from typing import Any
 
+import requests
+from urllib3.exceptions import HTTPError as Urllib3HTTPError
+
+from .client import NetworkError
+
 
 def _redact_kwargs(kwargs: dict[str, Any]) -> dict[str, Any]:
     safe_kwargs: dict[str, Any] = dict(kwargs)
@@ -42,13 +47,17 @@ def request_with_network_retry(
         try:
             return session.request(method, url, **kwargs)
         except Exception as exc:
+            if not isinstance(exc, (requests.exceptions.RequestException, OSError, Urllib3HTTPError)):
+                raise
+
             last_exc = exc
             if attempt + 1 < attempts:
                 sleep_seconds = min(backoff_cap_seconds, backoff_base_seconds * (2**attempt))
                 time.sleep(sleep_seconds)
 
     kwargs = _redact_kwargs(kwargs)
-    raise AssertionError(f"Network error calling {method} {url}: {last_exc}")
+    message = f"Network error calling {method} {url}: {type(last_exc).__name__ if last_exc else 'UnknownError'}"
+    raise NetworkError(message)
 
 
 def is_wekan_unauthorized(*, status_code: int, body: object) -> bool:

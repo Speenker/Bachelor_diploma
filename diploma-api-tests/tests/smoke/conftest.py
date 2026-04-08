@@ -6,6 +6,11 @@ import uuid
 import pytest
 
 from diploma_tests.client import NetworkError, WekanClient
+from diploma_tests.waiters import (
+    delete_card_with_retry_and_confirm_absent,
+    delete_list_with_retry_and_confirm_absent,
+    poll_until_board_deleted,
+)
 
 
 def _recover_created_board_by_title(
@@ -55,9 +60,12 @@ def smoke_board(client: WekanClient) -> dict[str, str]:
         yield board
     finally:
         try:
-            client.delete_board(str(board_id))
+            poll_until_board_deleted(client=client, board_id=str(board_id), timeout_seconds=6.0, attempts=8)
         except Exception:
-            pass
+            try:
+                client.delete_board(str(board_id))
+            except Exception:
+                pass
 
 
 @pytest.fixture(scope="module")
@@ -90,7 +98,7 @@ def smoke_list(client: WekanClient, smoke_board_id: str, smoke_suffix: str) -> d
         if ref.get("deleted") == "true":
             return
         try:
-            client.delete_list(board_id=smoke_board_id, list_id=list_id)
+            delete_list_with_retry_and_confirm_absent(client=client, board_id=smoke_board_id, list_id=list_id, timeout_seconds=4.0, attempts=10)
         except Exception:
             pass
 
@@ -107,7 +115,7 @@ def smoke_second_list(client: WekanClient, smoke_board_id: str, smoke_suffix: st
         if ref.get("deleted") == "true":
             return
         try:
-            client.delete_list(board_id=smoke_board_id, list_id=list_id)
+            delete_list_with_retry_and_confirm_absent(client=client, board_id=smoke_board_id, list_id=list_id, timeout_seconds=4.0, attempts=10)
         except Exception:
             pass
 
@@ -142,6 +150,13 @@ def smoke_card(
         if ref.get("deleted") == "true":
             return
         try:
-            client.delete_card(board_id=smoke_board_id, list_id=ref["list_id"], card_id=card_id)
+            delete_card_with_retry_and_confirm_absent(
+                client=client,
+                board_id=smoke_board_id,
+                list_id=ref["list_id"],
+                card_id=card_id,
+                timeout_seconds=4.0,
+                attempts=10,
+            )
         except Exception:
             pass

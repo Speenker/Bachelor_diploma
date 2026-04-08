@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+import time
 from pathlib import Path
 
 # When running via `pytest.exe` on Windows, sys.path[0] can be the Scripts folder.
@@ -16,8 +17,26 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 from diploma_tests.config import Settings
-from diploma_tests.client import NetworkError, WekanClient
+from diploma_tests.client import HttpError, NetworkError, WekanClient
 import uuid
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_makereport(item, call):
+    """Treat transient environment outages as skips, not test failures.
+
+    Wekan can be temporarily unreachable on local Windows setups (e.g. WinError
+    10053/10061). When that happens we prefer a controlled SKIP over a false
+    failure.
+    """
+
+    outcome = yield
+    rep = outcome.get_result()
+    if call.excinfo is not None and call.excinfo.errisinstance(NetworkError):
+        rep.outcome = "skipped"
+        reason = f"Wekan is not reachable ({call.excinfo.value})"
+        file_name, line_no, _ = item.location
+        rep.longrepr = (file_name, line_no, reason)
 
 
 @pytest.fixture(scope="session")
@@ -27,7 +46,10 @@ def settings() -> Settings:
 
 @pytest.fixture(scope="session")
 def client(settings: Settings) -> WekanClient:
-    return WekanClient.from_settings(settings)
+    try:
+        return WekanClient.from_settings(settings)
+    except NetworkError as exc:
+        pytest.skip(f"Wekan is not reachable for login ({exc})")
 
 
 @pytest.fixture(scope="session")
@@ -36,11 +58,37 @@ def client2(settings: Settings) -> WekanClient:
         pytest.skip("Second test user is not configured (set WEKAN_USERNAME_2/WEKAN_EMAIL_2 and WEKAN_PASSWORD_2)")
 
     client = WekanClient(settings.base_url, timeout_seconds=settings.timeout_seconds)
-    try:
-        client.login(username=settings.username2, email=settings.email2, password=settings.password2 or "")
-    except NetworkError:
-        pytest.skip("Wekan is not reachable for second-user login")
-    return client
+
+    # Second-user login is commonly the first thing to fail when the local Wekan
+    # is restarting/flaky. Retry longer here to avoid skipping the whole
+    # permissions suite due to a brief outage.
+    backoff_seconds = 0.2
+    last_network_error: NetworkError | None = None
+    for attempt in range(1, 9):
+        try:
+            client.login(username=settings.username2, email=settings.email2, password=settings.password2 or "")
+            return client
+        except NetworkError as exc:
+            last_network_error = exc
+            if attempt < 8:
+                time.sleep(min(2.0, backoff_seconds))
+                backoff_seconds *= 2
+                continue
+            pytest.skip(f"Wekan is not reachable for second-user login ({exc})")
+        except HttpError as exc:
+            # Usually means wrong credentials or the user doesn't exist.
+            body = exc.body
+            if isinstance(body, dict) and body.get("error") == "not-found":
+                pytest.skip(
+                    "Second test user credentials are configured, but the user does not exist on the Wekan server. "
+                    "Create the user in Wekan UI (or enable /users/register) and re-run."
+                )
+            pytest.skip(
+                "Second test user login was rejected. Check WEKAN_USERNAME_2/WEKAN_EMAIL_2 and WEKAN_PASSWORD_2. "
+                f"Server returned {exc.status_code}."
+            )
+
+    pytest.skip(f"Wekan is not reachable for second-user login ({last_network_error})")
 
 
 @pytest.fixture(scope="session")

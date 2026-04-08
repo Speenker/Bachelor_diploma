@@ -5,7 +5,9 @@ import time
 
 import pytest
 
+from diploma_tests.client import NetworkError
 from diploma_tests.http_helpers import is_wekan_unauthorized, request_with_network_retry
+from diploma_tests.waiters import poll_until_list_absent
 
 
 pytestmark = pytest.mark.functional
@@ -124,7 +126,7 @@ def _delete_board(*, settings, http_session, token: str, board_id: str) -> None:
             headers=_auth_headers(token),
             timeout=settings.timeout_seconds,
         )
-    except AssertionError:
+    except NetworkError:
         pass
 
 
@@ -171,23 +173,6 @@ def _delete_list_raw(*, settings, http_session, token: str, board_id: str, list_
         headers=_auth_headers(token),
         timeout=settings.timeout_seconds,
     )
-
-
-def _poll_until_list_absent(*, settings, http_session, token: str, board_id: str, list_id: str, timeout_seconds: float = 6.0, attempts: int = 12) -> None:
-    deadline = time.monotonic() + timeout_seconds
-    for attempt in range(1, attempts + 1):
-        resp = _get_lists_raw(settings=settings, http_session=http_session, token=token, board_id=board_id)
-        assert resp.status_code == 200
-        body = _json_or_text(resp)
-        if isinstance(body, list) and not any(isinstance(item, dict) and str(item.get("_id") or "") == list_id for item in body):
-            return
-
-        remaining = deadline - time.monotonic()
-        if attempt == attempts or remaining <= 0:
-            break
-        time.sleep(min(0.25, max(0.0, remaining / max(1, (attempts - attempt)))))
-
-    raise AssertionError("List still present after deletion")
 
 
 def test_lists_protected_endpoints_require_auth(settings, http_session, client):
@@ -327,7 +312,7 @@ def test_lists_create_get_by_id_and_delete_contract(settings, http_session, clie
         )
         assert resp_del.status_code == 200
 
-        _poll_until_list_absent(settings=settings, http_session=http_session, token=client.auth.token, board_id=board_id, list_id=list_id)
+        poll_until_list_absent(client=client, board_id=board_id, list_id=list_id, timeout_seconds=6.0, attempts=12)
 
     finally:
         if list_id:
@@ -355,6 +340,15 @@ def test_lists_create_rejects_missing_title(settings, http_session, client, uniq
 
     try:
         try:
+            resp_before = _get_lists_raw(settings=settings, http_session=http_session, token=client.auth.token, board_id=board_id)
+        except AssertionError:
+            pytest.skip("Network error while listing lists before invalid create")
+        assert resp_before.status_code == 200
+        body_before = _json_or_text(resp_before)
+        assert isinstance(body_before, list)
+        before_ids = {str(item.get("_id")) for item in body_before if isinstance(item, dict) and item.get("_id")}
+
+        try:
             resp = _create_list_raw(
                 settings=settings,
                 http_session=http_session,
@@ -366,7 +360,28 @@ def test_lists_create_rejects_missing_title(settings, http_session, client, uniq
             pytest.skip("Network error during invalid list creation")
 
         body = _json_or_text(resp)
-        if _is_wekan_error(resp.status_code, body) or not (isinstance(body, dict) and body.get("_id")):
+        if _is_wekan_error(resp.status_code, body):
+            try:
+                resp_after = _get_lists_raw(settings=settings, http_session=http_session, token=client.auth.token, board_id=board_id)
+            except AssertionError:
+                pytest.skip("Network error while listing lists after invalid create")
+            assert resp_after.status_code == 200
+            body_after = _json_or_text(resp_after)
+            assert isinstance(body_after, list)
+            after_ids = {str(item.get("_id")) for item in body_after if isinstance(item, dict) and item.get("_id")}
+            assert after_ids == before_ids
+            return
+
+        if not (isinstance(body, dict) and body.get("_id")):
+            try:
+                resp_after = _get_lists_raw(settings=settings, http_session=http_session, token=client.auth.token, board_id=board_id)
+            except AssertionError:
+                pytest.skip("Network error while listing lists after invalid create")
+            assert resp_after.status_code == 200
+            body_after = _json_or_text(resp_after)
+            assert isinstance(body_after, list)
+            after_ids = {str(item.get("_id")) for item in body_after if isinstance(item, dict) and item.get("_id")}
+            assert after_ids == before_ids
             return
         created_id = str(body.get("_id") or "") if isinstance(body, dict) else ""
         if created_id:

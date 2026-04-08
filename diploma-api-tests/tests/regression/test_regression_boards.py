@@ -65,7 +65,7 @@ def test_boards_create_board_returns_required_fields(client):
     finally:
         if board_id:
             try:
-                client.delete_board(board_id)
+                poll_until_board_deleted(client=client, board_id=board_id, timeout_seconds=6.0, attempts=8)
             except Exception:
                 pass
 
@@ -85,7 +85,7 @@ def test_boards_created_board_visible_in_user_boards(client):
     finally:
         if board_id:
             try:
-                client.delete_board(board_id)
+                poll_until_board_deleted(client=client, board_id=board_id, timeout_seconds=6.0, attempts=8)
             except Exception:
                 pass
 
@@ -104,7 +104,7 @@ def test_boards_get_board_returns_same_id(client):
     finally:
         if board_id:
             try:
-                client.delete_board(board_id)
+                poll_until_board_deleted(client=client, board_id=board_id, timeout_seconds=6.0, attempts=8)
             except Exception:
                 pass
 

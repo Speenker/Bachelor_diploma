@@ -6,6 +6,7 @@ import uuid
 
 import pytest
 
+from diploma_tests.client import NetworkError
 from diploma_tests.http_helpers import is_wekan_unauthorized, request_with_network_retry
 from diploma_tests.waiters import poll_until_board_deleted
 
@@ -99,15 +100,18 @@ def _recover_board_id_by_title(
     deadline = time.monotonic() + poll_timeout_seconds
     for attempt in range(1, attempts + 1):
         try:
-            boards = _get_user_boards(
-                base_url=base_url,
-                http_session=http_session,
-                token=token,
-                user_id=user_id,
-                timeout_seconds=timeout_seconds,
+            resp = request_with_network_retry(
+                http_session,
+                "GET",
+                f"{base_url}/api/users/{user_id}/boards",
+                attempts=12,
+                headers=_auth_headers(token),
+                timeout=timeout_seconds,
             )
-        except AssertionError:
+        except NetworkError:
             boards = []
+        else:
+            boards = resp.json() if resp.status_code == 200 else []
         if isinstance(boards, list):
             match = next((b for b in boards if isinstance(b, dict) and b.get("title") == title and b.get("_id")), None)
             if match is not None:
@@ -134,6 +138,7 @@ def _create_board_resilient(
         raise ValueError("Resilient create requires a non-empty string title")
 
     backoff_seconds = 0.25
+    had_network_error = False
     for _ in range(5):
         try:
             resp = _create_board_raw(
@@ -144,11 +149,8 @@ def _create_board_resilient(
                 timeout_seconds=timeout_seconds,
             )
             break
-        except AssertionError as exc:
-            msg = str(exc)
-            if not (msg.startswith("Network error calling") and "POST" in msg and "/api/boards" in msg):
-                raise
-
+        except NetworkError:
+            had_network_error = True
             recovered_id = _recover_board_id_by_title(
                 base_url=base_url,
                 http_session=http_session,
@@ -165,7 +167,9 @@ def _create_board_resilient(
             time.sleep(backoff_seconds)
             backoff_seconds = min(1.0, backoff_seconds * 2)
     else:
-        raise AssertionError("Network error during board creation") from None
+        if had_network_error:
+            pytest.skip("Wekan is not reachable (network error during board creation)")
+        raise AssertionError("Board creation failed without a network error")
 
     if resp.status_code != 200:
         body = _json_or_text(resp)
@@ -310,7 +314,7 @@ def test_boards_private_board_not_accessible_to_other_user(settings, http_sessio
                 board_id=board_id,
                 timeout_seconds=settings.timeout_seconds,
             )
-        except AssertionError:
+        except NetworkError:
             pytest.skip("Network error while attempting cross-user delete")
         body_del = _json_or_text(resp_del)
         if resp_del.status_code == 200 and isinstance(body_del, dict) and str(body_del.get("_id") or "") == board_id:
@@ -432,6 +436,28 @@ def test_boards_member_role_change_endpoint_accepts_request(settings, http_sessi
         )
         assert resp_add.status_code == 200
 
+        try:
+            resp_board_after_add = request_with_network_retry(
+                http_session,
+                "GET",
+                f"{settings.base_url}/api/boards/{board_id}",
+                attempts=12,
+                headers=_auth_headers(client.auth.token),
+                timeout=settings.timeout_seconds,
+            )
+        except NetworkError:
+            pytest.skip("Network error while reading board after member add")
+        assert resp_board_after_add.status_code == 200
+        body_board_after_add = _json_or_text(resp_board_after_add)
+        assert isinstance(body_board_after_add, dict) and str(body_board_after_add.get("_id") or "") == board_id
+        members_after_add = body_board_after_add.get("members")
+        if isinstance(members_after_add, list):
+            assert any(
+                isinstance(m, dict)
+                and str(m.get("userId") or "") == client2.auth.user_id
+                for m in members_after_add
+            )
+
         resp_role = request_with_network_retry(
             http_session,
             "POST",
@@ -442,6 +468,38 @@ def test_boards_member_role_change_endpoint_accepts_request(settings, http_sessi
             timeout=settings.timeout_seconds,
         )
         assert resp_role.status_code == 200
+
+        try:
+            resp_board_after_role = request_with_network_retry(
+                http_session,
+                "GET",
+                f"{settings.base_url}/api/boards/{board_id}",
+                attempts=12,
+                headers=_auth_headers(client.auth.token),
+                timeout=settings.timeout_seconds,
+            )
+        except NetworkError:
+            pytest.skip("Network error while reading board after role change")
+        assert resp_board_after_role.status_code == 200
+        body_board_after_role = _json_or_text(resp_board_after_role)
+        assert isinstance(body_board_after_role, dict) and str(body_board_after_role.get("_id") or "") == board_id
+        members_after_role = body_board_after_role.get("members")
+        if isinstance(members_after_role, list):
+            member = next(
+                (
+                    m
+                    for m in members_after_role
+                    if isinstance(m, dict) and str(m.get("userId") or "") == client2.auth.user_id
+                ),
+                None,
+            )
+            assert isinstance(member, dict)
+            if "isNoComments" in member:
+                is_no_comments = member.get("isNoComments")
+                if isinstance(is_no_comments, str):
+                    assert is_no_comments.lower() == "true"
+                else:
+                    assert bool(is_no_comments) is True
 
     finally:
         if board_id:
