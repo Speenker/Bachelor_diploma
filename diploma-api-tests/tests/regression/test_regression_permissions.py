@@ -184,7 +184,6 @@ def test_permissions_add_and_remove_board_member_affects_visibility(settings, ht
     assert board_id
 
     try:
-        # Before sharing: not visible / not readable.
         if not _poll_until_board_absent_for_user(
             settings=settings,
             http_session=http_session,
@@ -195,8 +194,6 @@ def test_permissions_add_and_remove_board_member_affects_visibility(settings, ht
             attempts=16,
         ):
             pytest.xfail("BUG: other user already sees a private board before sharing")
-
-        # Share board.
         resp_add = _add_board_member_raw(
             settings=settings,
             http_session=http_session,
@@ -220,8 +217,6 @@ def test_permissions_add_and_remove_board_member_affects_visibility(settings, ht
         resp_read = _get_board_raw(settings=settings, http_session=http_session, token=client2.auth.token, board_id=board_id)
         body_read = _json_or_text(resp_read)
         assert resp_read.status_code == 200 and isinstance(body_read, dict) and str(body_read.get("_id") or "") == board_id
-
-        # Unshare board.
         resp_remove = _remove_board_member_raw(
             settings=settings,
             http_session=http_session,

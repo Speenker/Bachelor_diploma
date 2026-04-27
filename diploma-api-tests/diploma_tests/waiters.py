@@ -232,12 +232,6 @@ def poll_until_card_absent(
     timeout_seconds: float = 2.0,
     attempts: int = 5,
 ) -> None:
-    """Wait until a card is no longer visible in the swimlane cards list.
-
-    This is intentionally small and dependency-free. It is used to reduce flakiness
-    caused by eventual consistency or short delays after delete operations.
-    """
-
     deadline = time.monotonic() + timeout_seconds
     last_seen_ids: list[str] = []
     last_error: str | None = None
@@ -279,13 +273,10 @@ def poll_until_board_deleted(
     timeout_seconds: float = 8.0,
     attempts: int = 8,
 ) -> None:
-    """Wait until board deletion is confirmed by a successful delete response."""
-
     deadline = time.monotonic() + timeout_seconds
     last_error: str | None = None
 
     for attempt in range(1, attempts + 1):
-        # If the board is already gone, consider the operation successful.
         try:
             boards = client.get_user_boards()
             existing_ids = {str(b.get("_id")) for b in boards if isinstance(b, dict) and b.get("_id")}
@@ -294,7 +285,6 @@ def poll_until_board_deleted(
         except Exception as exc:
             if not isinstance(exc, (NetworkError, HttpError)):
                 raise
-            # Presence check is best-effort. Keep last_error for diagnostics.
             last_error = f"{type(exc).__name__} during board presence check: {exc}"
 
         try:
@@ -312,8 +302,6 @@ def poll_until_board_deleted(
         remaining = deadline - time.monotonic()
         if attempt == attempts or remaining <= 0:
             break
-
-        # Spread waiting across the remaining attempts to better utilize the timeout.
         sleep_seconds = max(0.0, remaining / max(1, (attempts - attempt)))
         time.sleep(min(0.5, sleep_seconds))
 

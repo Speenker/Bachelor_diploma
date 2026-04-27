@@ -59,7 +59,6 @@ def test_smoke_login_success_token_works(settings: Settings, http_session):
 
 
 def test_smoke_access_denied_without_authorization(settings: Settings, http_session, client):
-    # Local network retry for GET only (no global retry policy change).
     url = f"{settings.base_url}/api/users/{client.auth.user_id}/boards"
     last_exc: Exception | None = None
     resp = None
@@ -144,14 +143,12 @@ def test_smoke_move_card_to_another_list(
         new_list_id=smoke_second_list["_id"],
     )
 
-    # Update the fixture ref so cleanup deletes from the correct list.
     smoke_card["list_id"] = smoke_second_list["_id"]
 
     cards = client.get_swimlane_cards(board_id=smoke_board_id, swimlane_id=smoke_swimlane_id)
     moved = next((c for c in cards if c.get("_id") == smoke_card["_id"]), None)
     assert moved is not None
 
-    # Wekan returns listId for a card.
     assert moved.get("listId") == smoke_second_list["_id"]
 
 
@@ -196,7 +193,6 @@ def test_smoke_cleanup_delete_list_and_board_best_effort(client, smoke_suffix: s
 
         poll_until_board_deleted(client=client, board_id=str(board_id), timeout_seconds=8.0, attempts=8)
     finally:
-        # Best-effort cleanup if assertions fail mid-test.
         if list_id:
             try:
                 delete_list_with_retry_and_confirm_absent(client=client, board_id=str(board_id), list_id=str(list_id), timeout_seconds=4.0, attempts=10)

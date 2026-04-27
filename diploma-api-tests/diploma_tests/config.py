@@ -27,7 +27,6 @@ class Settings:
 
     @staticmethod
     def from_env() -> "Settings":
-        # Loads .env if present; environment variables still override it.
         load_dotenv(override=False)
 
         base_url = (os.getenv("BASE_URL") or "http://localhost").rstrip("/")

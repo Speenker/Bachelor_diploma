@@ -4,7 +4,6 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-# Always run from the project directory.
 Set-Location -Path $PSScriptRoot
 
 function Parse-DotEnvFile {
@@ -28,7 +27,6 @@ function Parse-DotEnvFile {
         $key = $trimmed.Substring(0, $idx).Trim()
         $value = $trimmed.Substring($idx + 1).Trim()
 
-        # Strip optional surrounding quotes.
         if (($value.StartsWith('"') -and $value.EndsWith('"')) -or ($value.StartsWith("'") -and $value.EndsWith("'"))) {
             if ($value.Length -ge 2) {
                 $value = $value.Substring(1, $value.Length - 2)

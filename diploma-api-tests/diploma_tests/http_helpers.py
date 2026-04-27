@@ -30,18 +30,6 @@ def request_with_network_retry(
     backoff_cap_seconds: float = 0.5,
     **kwargs: Any,
 ):
-    """Perform an HTTP request with a small retry loop for transient network errors.
-
-    Purpose
-    - Stabilize test runs in local environments where the server can occasionally
-      reset/abort connections.
-
-    Notes
-    - Retries are triggered only on exceptions thrown by the underlying request
-      call.
-    - This helper does not retry based on HTTP status codes.
-    """
-
     last_exc: Exception | None = None
     for attempt in range(attempts):
         try:
@@ -61,13 +49,6 @@ def request_with_network_retry(
 
 
 def is_wekan_unauthorized(*, status_code: int, body: object) -> bool:
-    """Return True if the response represents an unauthorized error in Wekan.
-
-    Wekan may respond in two forms:
-    - HTTP 401 or 403
-    - HTTP 200 with an error object in JSON, e.g. {"error":"Unauthorized", "statusCode":401}
-    """
-
     if status_code in (401, 403):
         return True
 

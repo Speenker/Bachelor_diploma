@@ -7,6 +7,8 @@
 - `functional` — расширенные проверки (негативные сценарии, граничные случаи, доступы).
 - `slow` — длительные проверки, которые можно исключать из обычных прогонов.
 
+Примечание: smoke‑проверки также помечены маркером `regression`, чтобы входить в регрессионный прогон.
+
 ## Что проверяется
 
 Проверки работают только через REST API. В область входят:
@@ -24,7 +26,7 @@
 cd C:\dev\mai\diploma\Bachelor\diploma-api-tests
 
 python -m venv .venv
-\.\.venv\Scripts\Activate.ps1
+.\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 
 Copy-Item .env.example .env
@@ -37,7 +39,10 @@ Copy-Item .env.example .env
 - `BASE_URL`
 - `WEKAN_USERNAME` или `WEKAN_EMAIL`
 - `WEKAN_PASSWORD`
-- `REQUEST_TIMEOUT_SECONDS`
+
+Опционально:
+
+- `REQUEST_TIMEOUT_SECONDS` (по умолчанию 20 секунд)
 
 Опционально (если нужны проверки с двумя пользователями):
 
@@ -68,19 +73,19 @@ run_functional_no_slow.cmd
 
 ```powershell
 # Все проверки
-pytest -q
+python -m pytest -q
 
 # Только быстрые
-pytest -m smoke -q
+python -m pytest -m smoke -q
 
 # Регрессия
-pytest -m regression -q
+python -m pytest -m regression -q
 
 # Функциональные
-pytest -m functional -q
+python -m pytest -m functional -q
 
 # Функциональные без slow
-pytest -m "functional and not slow" -q
+python -m pytest -m "functional and not slow" -q
 ```
 
 ## Структура
@@ -205,12 +210,14 @@ pytest -m "functional and not slow" -q
 
 - `skip` — корректное поведение при ограничениях/флаках окружения (например, стенд временно недоступен или не настроен второй пользователь).
 - `xfail` — обнаруженный дефект/несоответствие поведения продукта (например, проблемы с ACL/правами).
-- ретраи включены только для безопасных методов `GET/PUT/DELETE`; для `POST` вместо повторов используется recovery по title там, где это возможно.
+- в клиенте включены повторы на уровне HTTP‑сессии для `GET/PUT/DELETE` (по временным ошибкам 502/503/504);
+- для `POST` (создание сущностей) в тестах используется recovery по `title`, чтобы не ломать прогон при сетевых сбоях.
 
 | Область | Smoke | Regression | Functional |
 |---|---:|---:|---:|
 | Auth: login + токен на защищённом запросе | ✅ | ✅ | ✅ |
-| Auth: негативные креды/пустой токен | ✅ | ✅ | ✅ |
+| Auth: запрет доступа без `Authorization` / с неверным токеном | ✅ | ✅ | ✅ |
+| Auth: негативный логин (неверный/пустой пароль) | — | ✅ | ✅ |
 | Boards: create/get/list/delete | ✅ | ✅ | ✅ |
 | Swimlanes: получить default swimlane/карточки по swimlane | ✅ | — | ✅ |
 | Lists: create/get/list/delete | ✅ | ✅ | ✅ |
@@ -220,38 +227,3 @@ pytest -m "functional and not slow" -q
 | Business flows: end-to-end по REST API | ✅ | ✅ | ✅ |
 | Resilience: polling после delete + повторы delete | ✅ | ✅ | ✅ |
 | Resilience: отдельные `slow` проверки | — | — | ✅ |
-
-## Что не покрыто
-
-Wekan API шире текущего набора. Сейчас не покрыты (или покрыты минимально):
-
-- работа с вложениями (attachments), чеклистами (checklists), метками/лейблами, комментариями;
-- кастомные поля, шаблоны, активности/аудит, нотификации, интеграции и webhooks;
-- управление пользователями/ролями на уровне админа;
-- импорт/экспорт, backup/restore;
-- UI и end-to-end сценарии через браузер.
-
-## Ядро регрессии (15 сценариев)
-
-Эти сценарии используются как обязательный минимум регрессии.
-
-1) Успешный вход пользователя (`POST /users/login`).
-2) Вход с неверным паролем (`POST /users/login`).
-3) Запрет доступа без авторизации.
-4) Создание доски (`POST /api/boards`).
-5) Удаление доски (`DELETE /api/boards/{boardId}`).
-6) Видимость доски в списке досок (`GET /api/users/{userId}/boards`).
-7) Дорожки по умолчанию (`GET /api/boards/{boardId}/swimlanes`).
-8) Создание списка (`POST /api/boards/{boardId}/lists`).
-9) Видимость списка (`GET /api/boards/{boardId}/lists`).
-10) Удаление списка (`DELETE /api/boards/{boardId}/lists/{listId}`).
-11) Создание карточки (`POST /api/boards/{boardId}/lists/{listId}/cards`).
-12) Видимость карточки по дорожке (`GET /api/boards/{boardId}/swimlanes/{swimlaneId}/cards`).
-13) Обновление карточки (`PUT /api/boards/{boardId}/lists/{listId}/cards/{cardId}`).
-14) Перемещение карточки (`PUT /api/boards/{boardId}/lists/{fromListId}/cards/{cardId}` + новый `listId`).
-15) Удаление карточки (`DELETE /api/boards/{boardId}/lists/{listId}/cards/{cardId}`).
-
-Дополнительно (если настроены 2 пользователя):
-
-16) Приватная доска недоступна второму пользователю (ожидаемое поведение; при дефекте — `xfail`).
-17) Add/remove участника доски меняет видимость и доступ (при дефекте — `xfail`).

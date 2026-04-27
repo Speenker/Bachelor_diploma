@@ -33,8 +33,6 @@ class HttpError(RuntimeError):
 
 
 def _is_network_exception(exc: BaseException) -> bool:
-    # requests wraps many underlying socket/urllib3 errors into RequestException,
-    # but not always reliably across platforms/backends.
     if isinstance(exc, (requests.exceptions.RequestException, OSError, Urllib3HTTPError)):
         return True
     return False
@@ -47,13 +45,11 @@ class WekanClient:
         self.session = requests.Session()
         retry = Retry(
             total=3,
-            # Do not retry connection/read errors globally (especially for POST).
             connect=False,
             read=False,
             status=3,
             backoff_factor=0.25,
             status_forcelist=(502, 503, 504),
-            # Do not retry POST globally.
             allowed_methods=("GET", "PUT", "DELETE"),
             raise_on_status=False,
         )
@@ -80,7 +76,6 @@ class WekanClient:
         return headers
 
     def _request(self, method: str, path: str, *, json: Any | None = None) -> Any:
-        # Keep network retries limited to safe methods.
         safe_methods = {"GET", "PUT", "DELETE"}
         method_upper = method.upper()
         attempts = 6 if method_upper in safe_methods else 1
@@ -139,7 +134,6 @@ class WekanClient:
         else:
             raise ValueError("username or email must be provided")
 
-        # Targeted network retry for login only (safe and idempotent).
         last_exc: Exception | None = None
         data: Any | None = None
         for attempt in range(5):
@@ -417,8 +411,6 @@ class WekanClient:
         description: str | None = None,
         new_list_id: str | None = None,
     ) -> dict[str, str]:
-        # Wekan API docs list multipart/form-data and mark newBoardId/newSwimlaneId/newListId as required.
-        # In practice, sending JSON works on typical deployments.
         effective_list_id = new_list_id or list_id
         payload: dict[str, str] = {
             "authorId": self.auth.user_id,
