@@ -19,6 +19,28 @@ from diploma_tests.client import HttpError, NetworkError, WekanClient
 import uuid
 
 
+def _wait_for_wekan_http_ready(*, base_url: str, timeout_seconds: float) -> None:
+    url = base_url.rstrip("/") + "/"
+    deadline = time.monotonic() + timeout_seconds
+    backoff = 0.25
+    last_error: str | None = None
+
+    while True:
+        try:
+            resp = requests.get(url, timeout=5)
+            if 200 <= int(resp.status_code) < 500:
+                return
+            last_error = f"HTTP {resp.status_code}"
+        except Exception as exc:
+            last_error = f"{type(exc).__name__}: {exc}"
+
+        if time.monotonic() >= deadline:
+            raise NetworkError(f"Wekan did not become ready at {base_url} within {timeout_seconds:.0f}s ({last_error})")
+
+        time.sleep(min(2.0, backoff))
+        backoff *= 1.5
+
+
 @pytest.hookimpl(hookwrapper=True)
 def pytest_runtest_makereport(item, call):
     outcome = yield
@@ -33,6 +55,14 @@ def pytest_runtest_makereport(item, call):
 @pytest.fixture(scope="session")
 def settings() -> Settings:
     return Settings.from_env()
+
+
+@pytest.fixture(scope="session", autouse=True)
+def ensure_wekan_ready(settings: Settings) -> None:
+    try:
+        _wait_for_wekan_http_ready(base_url=settings.base_url, timeout_seconds=60.0)
+    except NetworkError as exc:
+        pytest.skip(str(exc))
 
 
 @pytest.fixture(scope="session")

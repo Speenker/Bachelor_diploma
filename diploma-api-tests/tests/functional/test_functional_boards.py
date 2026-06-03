@@ -390,7 +390,7 @@ def test_boards_sharing_add_and_remove_member_allows_visibility(settings, http_s
             if not any(isinstance(b, dict) and str(b.get("_id")) == board_id for b in (boards2_after if isinstance(boards2_after, list) else [])):
                 break
             if time.monotonic() >= deadline:
-                pytest.skip("Board still visible after member removal")
+                pytest.xfail("Board still visible after member removal (access revocation delay/bug)")
             time.sleep(0.5)
             boards2_after = _get_user_boards(
                 base_url=settings.base_url,
